@@ -35,6 +35,9 @@
 #include <grp.h>
 #include <getopt.h>
 #include <csignal>
+#include <stdio.h>
+#include <errno.h>
+#include <ftw.h>
 
 #include <fstream>
 #include <vector>
@@ -2265,14 +2268,37 @@ static int s3fs_write(const char* _path, const char* buf, size_t size, off_t off
   return static_cast<int>(res);
 }
 
+static fsblkcnt_t total = 0;
+static fsblkcnt_t filled_blocks = 0;
+static fsblkcnt_t block_size = 0X1000000 / 16;
+int sum(const char *fpath, const struct stat *sb, int typeflag) {
+    total += sb->st_size;
+    if(total >= block_size)
+    {
+        filled_blocks += total / block_size;
+        total %= block_size;
+    }
+    return 0;
+}
+
+void compute_file_sizes(const char* _path) {
+    ftw(_path, &sum, 1);
+    if(total != 0)
+        filled_blocks++;
+}
+
 static int s3fs_statfs(const char* _path, struct statvfs* stbuf)
 {
   // WTF8_ENCODE(path)
   // 256T
-  stbuf->f_bsize  = 0X1000000;
-  stbuf->f_blocks = 0X1000000;
-  stbuf->f_bfree  = 0x1000000;
-  stbuf->f_bavail = 0x1000000;
+  total = 0;
+  filled_blocks = 0;
+  stbuf->f_bsize  = block_size;
+  stbuf->f_blocks = 0X1000000 / 16; // this, along with the block_size gives a total of 1TB
+  compute_file_sizes(mountpoint.c_str());
+
+  stbuf->f_bfree = stbuf->f_blocks - filled_blocks;
+  stbuf->f_bavail = stbuf->f_blocks - filled_blocks;
   stbuf->f_namemax = NAME_MAX;
   return 0;
 }
